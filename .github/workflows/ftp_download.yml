@@ -1,4 +1,4 @@
-name: Download GameServer.exe via FTP (PASV mode)
+name: Download GameServer.exe via FTP PASV
 
 on:
   push:
@@ -19,31 +19,63 @@ jobs:
 
           ftp = ftplib.FTP()
           ftp.connect('115.68.114.157', 9488, timeout=30)
-          print(ftp.getwelcome())
+          print(f'Welcome: {ftp.getwelcome()}')
           ftp.login('anonymous', 'test@test.com')
           ftp.cwd('/GameServer')
           ftp.set_pasv(True)
+          print('PASV mode enabled')
 
           files = ftp.nlst()
           print(f'Files: {files}')
 
-          # Try PASV download
           with open('GameServer.exe', 'wb') as f:
-              def callback(data):
+              sz = [0]
+              def cb(data):
                   f.write(data)
-                  nonlocal sz
                   sz[0] += len(data)
                   if sz[0] % 1048576 == 0:
                       print(f'{sz[0]//1048576} MB', end=' ')
-              sz = [0]
               try:
-                  ftp.retrbinary('RETR GameServer.exe', callback)
-                  print(f'\nDONE! {sz[0]} bytes')
+                  ftp.retrbinary('RETR GameServer.exe', cb, blocksize=65536)
+                  print(f'
+PASV SUCCESS! {sz[0]} bytes')
               except Exception as e:
-                  print(f'\nPASV failed: {e}')
-                  # Fallback: try EPRT (IPv6-style PORT)
-                  ftp.sendcmd('EPRT |1|{{REPLACE_IP}}|31338|')  # Will be replaced below
+                  print(f'
+PASV failed: {e}')
+                  import socket
                   ftp.set_pasv(False)
+                  p = ip.split('.')
+                  sock = socket.socket()
+                  sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                  sock.bind(('0.0.0.0', 0))
+                  port = sock.getsockname()[1]
+                  sock.listen(1)
+                  sock.settimeout(30)
+                  p1 = port >> 8
+                  p2 = port & 0xFF
+                  ftp.sendcmd(f'PORT {p[0]},{p[1]},{p[2]},{p[3]},{p1},{p2}')
+                  ftp.sendcmd('TYPE I')
+                  result = ftp.sendcmd('RETR GameServer.exe')
+                  print(f'PORT RETR: {result}')
+                  try:
+                      conn, addr = sock.accept()
+                      print(f'Data from: {addr}')
+                      data = bytearray()
+                      while True:
+                          chunk = conn.recv(65536)
+                          if not chunk:
+                              break
+                          data.extend(chunk)
+                      conn.close()
+                      sock.close()
+                      f.seek(0)
+                      f.write(data)
+                      print(f'PORT SUCCESS! {len(data)} bytes')
+                  except socket.timeout:
+                      print('PORT also timed out')
+                      ftp.abort()
+                  finally:
+                      sock.close()
           ftp.close()
           PYEOF
 
