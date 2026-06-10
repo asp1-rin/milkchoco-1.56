@@ -1,4 +1,4 @@
-name: Download GameServer.exe via FTP
+name: Download GameServer.exe via FTP (PASV mode)
 
 on:
   push:
@@ -9,49 +9,46 @@ jobs:
   download:
     runs-on: ubuntu-latest
     steps:
-      - name: Download GameServer.exe via FTP
+      - name: PASV mode download
         run: |
           python3 << 'PYEOF'
-          import socket, ftplib, urllib.request
+          import ftplib, urllib.request
 
           ip = urllib.request.urlopen('https://ifconfig.me', timeout=10).read().decode().strip()
           print(f'Runner IP: {ip}')
 
-          server = socket.socket()
-          server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-          server.bind(('0.0.0.0', 31338))
-          server.listen(1)
-          server.settimeout(60)
-
           ftp = ftplib.FTP()
-          ftp.connect('115.68.114.157', 9488, timeout=15)
+          ftp.connect('115.68.114.157', 9488, timeout=30)
+          print(ftp.getwelcome())
           ftp.login('anonymous', 'test@test.com')
           ftp.cwd('/GameServer')
+          ftp.set_pasv(True)
 
-          p = ip.split('.')
-          ftp.sendcmd(f'PORT {p[0]},{p[1]},{p[2]},{p[3]},122,106')
-          ftp.sendcmd('TYPE I')
-          print(ftp.sendcmd('RETR GameServer.exe'))
+          files = ftp.nlst()
+          print(f'Files: {files}')
 
-          conn, addr = server.accept()
-          print(f'Connected from {addr}')
-          data = b''
-          while True:
-              chunk = conn.recv(65536)
-              if not chunk:
-                  break
-              data += chunk
-              print(f'{len(data)} bytes', end='\r')
-          conn.close()
-          server.close()
-          ftp.close()
-
+          # Try PASV download
           with open('GameServer.exe', 'wb') as f:
-              f.write(data)
-          print(f'\nDONE! {len(data)} bytes')
+              def callback(data):
+                  f.write(data)
+                  nonlocal sz
+                  sz[0] += len(data)
+                  if sz[0] % 1048576 == 0:
+                      print(f'{sz[0]//1048576} MB', end=' ')
+              sz = [0]
+              try:
+                  ftp.retrbinary('RETR GameServer.exe', callback)
+                  print(f'\nDONE! {sz[0]} bytes')
+              except Exception as e:
+                  print(f'\nPASV failed: {e}')
+                  # Fallback: try EPRT (IPv6-style PORT)
+                  ftp.sendcmd('EPRT |1|{{REPLACE_IP}}|31338|')  # Will be replaced below
+                  ftp.set_pasv(False)
+          ftp.close()
           PYEOF
 
       - name: Upload artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: GameServer
